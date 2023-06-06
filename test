@@ -1,0 +1,326 @@
+const sendToken = require('./jwt')
+const sendEmail = require('./email')
+const crypto = require('crypto')
+const ErrorHandler = require('./errorHandler')
+
+/** 
+  *  * This (Auth) Class Is Used To Create The Authentication Flow
+  *  ! It Should Extends ErrorHandler Class To Handle The Errors
+  *  ^ It Has All The Required Functions TO Create A Basic Authentication 
+  *  TODO: To Create The Cookie Securing Mechanism To Prevent From Cookie Hijacking
+
+  */
+
+class Auth extends ErrorHandler {
+
+
+/** 
+ * 
+  *  * This (registerUser) Function Allows The User To Create The Signup Flow
+  *  ! Must Be Called With Required Parameters
+  *  @params req : req,res,next,Model,Body
+  *  @req : This Parameter Contains The Request Send From The Client
+  *  @res : This parameter Contains The Response Sent From The Client
+  *  @next : This Parameter is used to pass control to the next middleware function
+  *  @Modal : This is The Database Schema To be Passed To The Function To Select The Database
+  *  @Body : This Contains The Values TO Be Inserted In The Database
+  *  Description: This is an async function that registers a user, sends an email verification link, and returns a token.
+
+ */
+
+
+    async registeruser(req, res, next, Model, Body) {
+        try {
+            const user = await Model.create(Body)
+            const IsVerified = user.getVerifyToken()
+            await user.save({ validateBeforeSave: false })
+            user.password = undefined
+            user.isVerifyToken = undefined
+            user.isVerifyTokenExpire = undefined
+
+            const resetUrl = `${req.protocol}://${req.get('host')}/api/v1/verify/user/${IsVerified}`
+            const message = `Your email verification link is \n\n
+            ${resetUrl}\n\n if you have not requested this email then ignore it`
+            try {
+                sendEmail({
+                    email: user.email,
+                    subject: 'email verification link',
+                    message
+
+                })
+                if (res.status(200)) {
+                    const messages = `email send to ${user.email}`
+                    sendToken(user, 201, res, messages)
+                }
+                else {
+                    const messages = 'failed'
+                    sendToken(user, 201, res, messages)
+                }
+
+
+
+
+            }
+            catch (error) {
+                user.resetPasswordToken = undefined
+                user.resetPasswordTokenExpire = undefined
+                await user.save({ validateBeforeSave: false })
+                return next(new ErrorHandler(error.message), 500)
+            }
+
+
+
+
+
+
+        } catch (error) {
+            next(new ErrorHandler(`Sorry Your Request Could Not Be completes ${error}`, 500))
+        }
+    }
+
+
+
+    /** 
+    *    * This (loginUser) Function Allows The User To Initiate The Login  Flow
+    *    ! Must Be Called With Required Parameters
+    *    @params : req,res,next,Model,Body
+    *    @req : This Parameter Contains The Request Send From The Client
+    *    @res : This parameter Contains The Response Sent From The Client
+    *    @next : This Parameter is used to pass control to the next middleware function
+    *    @Modal : This is The Database Schema To be Passed To The Function To Select The Database
+    *    Description : This is an asynchronous function that logs in a user by checking their email and password,
+    *    * verifying their email status, and sending a token for authentication.
+     */
+
+
+    async loginUser(req, res, next, Model) {
+        try {
+            const { email, password } = req.body
+            if (!email || !password) {
+                return next(new ErrorHandler('please enter email and password', 400))
+            }
+            // finding in db
+            const user = await Model.findOne({ email }).select('+password')
+            if (!user) {
+                return next(new ErrorHandler(' email and password incorrect', 401))
+            }
+            if (!await user.isValidPassword(password)) {
+                return next(new ErrorHandler('email and password incorrect', 401))
+            }
+            const verified = user.isVerified()
+            if (verified == true) {
+                const messages = `User ${user.email} is  verified `
+                user.password = undefined
+                user.isVerifyToken = undefined
+                user.isVerifyTokenExpire = undefined
+
+                sendToken(user, 201, res, messages)
+
+            }
+            else {
+                const IsVerified = user.getVerifyToken()
+                await user.save({ validateBeforeSave: false })
+                user.password = undefined
+
+                const resetUrl = `${req.protocol}://${req.get('host')}/api/v1/verify/user/${IsVerified}`
+                const message = `Your email verification link is \n\n
+        ${resetUrl}\n\n if you have not requested this email then ignore it`
+                try {
+                    sendEmail({
+                        email: user.email,
+                        subject: 'email verification link',
+                        message
+
+                    })
+                    const messages = `User ${user.email} is not verified Please Verify Your Email`
+                    user.isVerifyToken = undefined
+                    user.isVerifyTokenExpire = undefined
+                    sendToken(user, 201, res, messages)
+
+                }
+                catch (error) {
+                    user.resetPasswordToken = undefined
+                    user.resetPasswordTokenExpire = undefined
+                    await user.save({ validateBeforeSave: false })
+                    return next(new ErrorHandler(error.message), 500)
+                }
+
+
+
+            }
+
+        } catch (error) {
+            return next(new ErrorHandler(error, 500))
+
+        }
+
+
+    }
+
+    /**
+      *  * This (logoutUser) Function Allows The User To  Logout and Clears The Current Sessions Of The User
+      *  ! Must Be Called With Required Parameters
+      *  @params : req,res,next,Model,Body
+      *  @req : This Parameter Contains The Request Send From The Client
+      *  @res : This parameter Contains The Response Sent From The Client
+      *  @next : This Parameter is used to pass control to the next middleware function
+      *  Description : The function logs out a user by setting the token cookie to null and returning a success
+      * *   message.
+
+    
+     */
+
+
+    logoutUser(req, res, next) {
+        try {
+            res.cookie('token', null, {
+                expires: new Date(Date.now()),
+                httpOnly: true
+            })
+                .status(200)
+                .json({
+                    success: true,
+                    message: 'LoggedOut'
+                })
+        } catch (error) {
+            next(new ErrorHandler(`sorry Your request could not be completed`))
+        }
+
+
+    }
+
+
+    /**
+      *  * This (forgotPassword) Function Allows The User To Change The Password By Receiving a Token In Email
+      *  ! Must Be Called With Required Parameters
+      *  @params : req,res,next,Model,Body
+      *  @req : This Parameter Contains The Request Send From The Client
+      *  @res : This parameter Contains The Response Sent From The Client
+      *  @next : This Parameter is used to pass control to the next middleware function
+      *  @Modal : This is The Database Schema To be Passed To The Function To Select The Database
+      *  Description : If the user is not found in the database, an error message with status code 404 is
+      *    * returned. If the email is successfully sent to the user, a success message with status code 200
+      *    * is returned. If there is an error sending the email, an error message with status code 500 is
+      *    * returned. If there is an error in the try block, an error message with status code 500
+     */
+
+
+ 
+    async forgotPassword(req, res, next, Model) {
+        try {
+            const user = await Model.findOne({ email: req.body.email })
+            if (!user) {
+                return next(new ErrorHandler('email not found in database', 404))
+            }
+            const getResetToken = user.getResetToken()
+            await user.save({ validateBeforeSave: false })
+
+            //  create reset url
+            const resetUrl = `${req.protocol}://${req.get('host')}/api/v1/password/reset/${getResetToken}`
+            const message = `Your password reset token url is as follow\n\n
+            ${resetUrl}\n\n if you have not requested this email then ignore it`
+            try {
+                sendEmail({
+                    email: user.email,
+                    subject: 'ouidily password recovery',
+                    message
+
+                })
+                res.status(200).json({
+                    success: true,
+                    message: `email send to ${user.email}`
+                })
+
+            }
+            catch (error) {
+                user.resetPasswordToken = undefined
+                user.resetPasswordTokenExpire = undefined
+                await user.save({ validateBeforeSave: false })
+                return next(new ErrorHandler(error.message), 500)
+            }
+
+        } catch (error) {
+            next(new ErrorHandler(`Sorry Your Request Could Not Be Completed`, 500))
+        }
+
+    }
+    /**
+      *  * This (resetPassword) Function Allows The User To Create The Reset The password Using The Token
+      *  ! Must Be Called With Required Parameters
+      *  @params : req,res,next,Model,Body
+      *  @req : This Parameter Contains The Request Send From The Client
+      *  @res : This parameter Contains The Response Sent From The Client
+      *  @next : This Parameter is used to pass control to the next middleware function
+      *  @Modal : This is The Database Schema To be Passed To The Function To Select The Database
+      *  Description :If the user is not found, an error message "password reset token is invalid or expired"
+      *   * is returned. If the password and confirmPassword do not match, an error message "password does
+      *   * not match" is returned. If there are no errors, a token is sent with a status code of 201.
+     */
+
+
+ 
+    async resetPassword(req, res, next, Model) {
+        try {
+            const resetPasswordToken = crypto.createHash('sha256').update(req.params.token).digest('hex')
+            const user = await Model.findOne({
+                resetPasswordToken,
+                resetPasswordTokenExpire: {
+                    $gt: Date.now()
+                }
+            })
+            if (!user) {
+                return next(new ErrorHandler('password reset token is invalid or expired'))
+            }
+            if (req.body.password !== req.body.confirmPassword) {
+                return next(new ErrorHandler('password does not match'))
+
+            }
+            user.password = req.body.password
+            user.resetPasswordToken = undefined
+            user.resetPasswordTokenExpire = undefined
+            await user.save({ validateBeforeSave: false })
+            sendToken(user, 201, res)
+        } catch (error) {
+            next(error)
+        }
+
+    }
+
+
+    /**
+   *  * This (verifyUser) verifies a user's token and updates their verification status in the database.
+   *  ! Must Be Called With Required Parameters
+   *  @params : req,res,next,Model,Body
+   *  @req : This Parameter Contains The Request Send From The Client
+   *  @res : This parameter Contains The Response Sent From The Client
+   *  @next : This Parameter is used to pass control to the next middleware function
+   *  @Modal : This is The Database Schema To be Passed To The Function To Select The Database
+   *  Description :If the user is not found, an error message is returned with the message "verification
+   *  * token is invalid or expired". If the user is found and successfully verified, a token is sent
+   *  * with a status code of 201.
+  */
+  
+    async verifyUser(req, res, next, Model) {
+        try {
+            const isVerifyToken = crypto.createHash('sha256').update(req.params.token).digest('hex')
+            const user = await Model.findOne({
+                isVerifyToken,
+                isVerifyTokenExpire: {
+                    $gt: Date.now()
+                }
+            })
+            if (!user) {
+                return next(new ErrorHandler('verification token is invalid or expired'))
+            }
+            user.isVerfied = true
+            user.isVerifyToken = undefined
+            user.isVerifyTokenExpire = undefined
+            await user.save({ validateBeforeSave: false })
+            sendToken(user, 201, res)
+        } catch (error) {
+            next(error)
+        }
+    }
+
+}
+module.exports = new Auth()
