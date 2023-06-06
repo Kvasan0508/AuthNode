@@ -4,7 +4,10 @@
   "description": "The Auth class provides the following methods:",
   "main": "eturning a token for authentication.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon server.js",
+    "dev": "set NODE_ENV=development&&nodemon server.js ",
+    "prod": "set NODE_ENV=production&&nodemon server.js "
   },
   "keywords": [
     "Authendication",
@@ -14,5 +17,8 @@
     "MongoDb"
   ],
   "author": "Keerthi vasan , Thiru Sharma",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "nodemon": "^2.0.22"
+  }
 }
